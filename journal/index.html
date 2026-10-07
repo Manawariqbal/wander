@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wander journal</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <style>
+    body { margin: 0; font: 15px/1.5 system-ui, sans-serif; display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+    aside { overflow: auto; padding: 16px; border-right: 1px solid #ddd; }
+    #map { height: 100%; }
+    .walk { padding: 8px 0; border-bottom: 1px solid #eee; cursor: pointer; }
+    .walk small { color: #777; display: block; }
+    @media (max-width: 700px) { body { grid-template-columns: 1fr; grid-template-rows: 40vh 1fr; } aside { order: 2; } }
+  </style>
+</head>
+<body>
+  <aside>
+    <h2>Walks</h2>
+    <div id="list"></div>
+    <h3>Sightings</h3>
+    <div id="sightings"></div>
+    <p id="summary"></p>
+  </aside>
+  <div id="map"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script>
+    const map = L.map("map").setView([20, 0], 2);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
+    let layers = [];
+
+    async function load() {
+      const walks = await (await fetch("/api/walks")).json();
+      const list = document.getElementById("list");
+      list.innerHTML = "";
+      walks.forEach((w) => {
+        const d = document.createElement("div");
+        d.className = "walk";
+        d.innerHTML = `Walk #${w.id}<small>${w.started_at}</small>`;
+        d.onclick = () => show(w.id);
+        list.appendChild(d);
+      });
+      if (walks.length) show(walks[0].id);
+    }
+
+    async function show(id) {
+      const w = await (await fetch(`/api/walks/${id}`)).json();
+      layers.forEach((l) => map.removeLayer(l)); layers = [];
+      if (w.route) layers.push(L.geoJSON(w.route.geometry, { style: { color: "#888", dashArray: "6 6" } }).addTo(map));
+      if (w.track.length) layers.push(L.polyline(w.track, { color: "#2a7" , weight: 4 }).addTo(map));
+      const sl = document.getElementById("sightings"); sl.innerHTML = "";
+      w.sightings.forEach((s) => {
+        if (s.lat != null) layers.push(L.marker([s.lat, s.lon]).bindPopup(`${s.subject}`).addTo(map));
+        sl.insertAdjacentHTML("beforeend", `<div>${s.subject} <small>(${s.kind || "other"})</small></div>`);
+      });
+      document.getElementById("summary").textContent = w.summary || "";
+      const pts = w.track.length ? w.track : (w.start_lat ? [[w.start_lat, w.start_lon]] : []);
+      if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 17 });
+    }
+    load();
+  </script>
+</body>
+</html>
