@@ -1,7 +1,11 @@
 """Nearby points of interest: OpenStreetMap (Overpass) + Wikipedia."""
 import httpx
 
-OVERPASS = "https://overpass-api.de/api/interpreter"
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
 WIKI = "https://en.wikipedia.org/w/api.php"
 UA = {"User-Agent": "wander-ai/0.1 (hacktoberfest project)"}
 
@@ -17,9 +21,21 @@ async def osm_pois(lat: float, lon: float, radius_m: int = 600, limit: int = 40)
     );
     out center {limit};
     """
+    last_exc: Exception | None = None
+    r = None
     async with httpx.AsyncClient(timeout=40, headers=UA) as client:
-        r = await client.post(OVERPASS, data={"data": q})
-        r.raise_for_status()
+        for url in OVERPASS_URLS:
+            try:
+                r = await client.post(url, data={"data": q})
+                r.raise_for_status()
+                break
+            except Exception as exc:
+                print(f"[overpass] {url} failed: {exc!r}")
+                last_exc = exc
+                r = None
+    if r is None:
+        raise last_exc  # prefetch handles this and carries on without OSM data
+
     pois = []
     for el in r.json().get("elements", []):
         tags = el.get("tags", {})

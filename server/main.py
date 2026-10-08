@@ -61,12 +61,19 @@ async def guarded(coro) -> None:
 
 async def handle_audio(ws: WebSocket, agent: WalkAgent, audio: bytes) -> None:
     await ws.send_json({"type": "status", "state": "thinking"})
-    text = await stt.transcribe(audio)
-    await ws.send_json({"type": "transcript", "text": text})
-    if not text:
-        return
-    await speak(ws, agent, agent.on_utterance(text))
-
+    print(f"[audio] received {len(audio)} bytes")
+    try:
+        text = await stt.transcribe(audio)
+        print(f"[stt] {text!r}")
+        await ws.send_json({"type": "transcript", "text": text})
+        if not text:
+            await ws.send_json({"type": "status", "state": "ready"})
+            return
+        await speak(ws, agent, agent.on_utterance(text))
+        await ws.send_json({"type": "status", "state": "ready"})
+    except Exception:
+        await ws.send_json({"type": "status", "state": "ready"})
+        raise
 
 @app.websocket("/ws/walk")
 async def walk_ws(ws: WebSocket):
@@ -116,7 +123,12 @@ def get_walk(walk_id: int):
         raise HTTPException(404, "walk not found")
     return walk
 
+from fastapi.responses import FileResponse
 
+
+@app.get("/debug/last.wav")
+def last_wav():
+    return FileResponse("data/last_utterance.wav", media_type="audio/wav")
 # static mounts last so they don't shadow the routes above
 app.mount("/journal", StaticFiles(directory="journal", html=True), name="journal")
 app.mount("/", StaticFiles(directory="client", html=True), name="client")
