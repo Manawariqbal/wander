@@ -126,9 +126,7 @@ def get_walk(walk_id: int):
 from fastapi.responses import FileResponse
 
 
-@app.get("/debug/last.wav")
-def last_wav():
-    return FileResponse("data/last_utterance.wav", media_type="audio/wav")
+
 # static mounts last so they don't shadow the routes above
 app.mount("/journal", StaticFiles(directory="journal", html=True), name="journal")
 app.mount("/", StaticFiles(directory="client", html=True), name="client")

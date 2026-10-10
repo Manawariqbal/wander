@@ -1,10 +1,22 @@
-// Screen-free client: a black page. Tap anywhere to start/stop talking.
+// Screen-free client: a black page. Tap once to talk; it stops listening when you stop talking.
 // Sends GPS pings + recorded utterances over a websocket; plays back audio replies.
 (() => {
   const statusEl = document.getElementById("status");
   const setStatus = (t) => (statusEl.textContent = t);
 
-  let ws, started = false, recording = false, recorder, chunks = [], stream, wakeLock, audioCtx;
+  // ---- debugging: set to false once everything works ----
+  const DEBUG = false;  // plays back your recording + logs mic levels in the console
+
+  // ---- end-of-speech tuning ----
+  const SILENCE_MS = 1200;      // quiet this long after speech => stop
+  const NO_SPEECH_MS = 7000;    // never spoke => cancel
+  const MAX_MS = 20000;         // hard cap per utterance
+  const START_DELAY_MS = 350;   // ignore the start beep
+  const MIN_VOICE_MS = 250;     // need this much voice to count as speech
+  const MIN_THRESHOLD = 0.012;  // raise if background noise keeps it listening
+
+  let ws, started = false, recording = false, recorder, chunks = [], stream, wakeLock, audioCtx, analyser;
+  let vadTimer = null, discard = false;
   let pendingHeader = null;
   const queue = [];
   const player = new Audio();
@@ -71,6 +83,53 @@
     );
   }
 
+  // ---- voice activity detection (simple energy-based) ----
+  function startVad() {
+    const buf = new Float32Array(analyser.fftSize);
+    const t0 = performance.now();
+    let last = t0, noise = 0.003, voiceMs = 0, lastVoice = 0, speechStarted = false, peak = 0, ticks = 0;
+
+    vadTimer = setInterval(() => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      const now = performance.now(), dt = now - last, elapsed = now - t0;
+      last = now;
+      if (elapsed < START_DELAY_MS) return;
+
+      peak = Math.max(peak, rms);
+      const threshold = Math.max(MIN_THRESHOLD, noise * 3);
+      if (DEBUG && ++ticks % 10 === 0) {
+        console.log(`mic rms=${rms.toFixed(4)} threshold=${threshold.toFixed(4)} speech=${speechStarted}`);
+      }
+
+      if (rms > threshold) {
+        voiceMs += dt; lastVoice = now;
+        if (voiceMs >= MIN_VOICE_MS) speechStarted = true;
+      } else if (!speechStarted) {
+        noise = 0.95 * noise + 0.05 * rms; // track background level
+      }
+
+      if (speechStarted && now - lastVoice > SILENCE_MS) finish(false);
+      else if (!speechStarted && elapsed > NO_SPEECH_MS) {
+        if (DEBUG) console.warn(`no speech detected. loudest level seen: ${peak.toFixed(4)} (threshold ${threshold.toFixed(4)})`);
+        finish(true);
+      }
+      else if (elapsed > MAX_MS) finish(false);
+    }, 50);
+  }
+
+  function finish(cancel) {
+    if (!recording) return;
+    clearInterval(vadTimer); vadTimer = null;
+    discard = cancel;
+    recorder.stop();
+    recording = false;
+    beep(520);
+    setStatus(cancel ? "ready" : "thinking");
+  }
+
   // ---- recording ----
   function pickMime() {
     for (const m of ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"]) {
@@ -81,19 +140,21 @@
   function startRecording() {
     stopPlayback();
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "interrupt" }));
-    chunks = [];
+    chunks = []; discard = false;
     const mime = pickMime();
     recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     recorder.onstop = async () => {
+      if (discard) return;
       const blob = new Blob(chunks, { type: recorder.mimeType });
+      console.log("recorded bytes:", blob.size, blob.type);
+      if (DEBUG) new Audio(URL.createObjectURL(blob)).play().catch(() => {}); // hear what was captured
       if (blob.size > 1500 && ws && ws.readyState === 1) ws.send(await blob.arrayBuffer());
+      else setStatus("ready");
     };
     recorder.start();
     recording = true; beep(880); navigator.vibrate && navigator.vibrate(30); setStatus("listening");
-  }
-  function stopRecording() {
-    recorder.stop(); recording = false; beep(520); setStatus("thinking");
+    startVad();
   }
 
   // ---- first tap: unlock audio, ask permissions, connect ----
@@ -102,8 +163,23 @@
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     player.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA="; // unlock iOS playback
     player.play().catch(() => {});
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-    catch (e) { setStatus("mic blocked"); return; }
+    try {
+      // Raw microphone signal: browser processing can pump noise and hurt Whisper.
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+    } catch (e) { setStatus("mic blocked"); return; }
+
+    if (DEBUG) {
+      const t = stream.getAudioTracks()[0];
+      console.log("microphone in use:", t.label, t.getSettings());
+    }
+
+    // analyser for end-of-speech detection (not connected to speakers)
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    audioCtx.createMediaStreamSource(stream).connect(analyser);
+
     try { wakeLock = await navigator.wakeLock.request("screen"); } catch (_) { /* optional */ }
     watchGps();
     connect();
@@ -112,7 +188,8 @@
   document.getElementById("hit").addEventListener("click", async () => {
     if (!started) return begin();
     if (!ws || ws.readyState !== 1) return;
-    recording ? stopRecording() : startRecording();
+    if (audioCtx && audioCtx.state === "suspended") await audioCtx.resume();
+    recording ? finish(false) : startRecording();  // tap again to stop early
   });
 
   document.addEventListener("visibilitychange", async () => {

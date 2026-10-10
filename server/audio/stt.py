@@ -12,11 +12,18 @@ from faster_whisper import WhisperModel
 from server import config
 
 SR = 16000
+BEEP_TRIM_S = 0.25  # drop the start beep the browser records; lower to 0.15 if first words get clipped
 
 # Phrases Whisper tends to invent when there is no real speech in the audio.
 _HALLUCINATIONS = (
     "see you in the next video", "thanks for watching", "thank you for watching",
     "make a video", "please subscribe", "subtitles by", "amara.org",
+)
+
+# Biases Whisper toward the vocabulary it will actually hear.
+_PROMPT = (
+    "Voice commands for a walking companion: plan a 30 minute loop, "
+    "what birds should I hear, what's around me, log a kingfisher, say that again, I'm done."
 )
 
 
@@ -51,9 +58,16 @@ def _save_debug(samples: np.ndarray) -> None:
         w.writeframes(pcm.tobytes())
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z ]", "", text.lower()).strip()
+
+
 def _is_hallucination(text: str) -> bool:
-    t = re.sub(r"[^a-z ]", "", text.lower()).strip()
-    return t in ("thank you", "you", "bye") or any(p in t for p in _HALLUCINATIONS)
+    t = _norm(text)
+    if t in ("thank you", "you", "bye") or any(p in t for p in _HALLUCINATIONS):
+        return True
+    # Whisper sometimes echoes the initial prompt when the audio is unclear
+    return len(t) > 25 and t in _norm(_PROMPT)
 
 
 def _run(samples: np.ndarray) -> str:
@@ -64,18 +78,20 @@ def _run(samples: np.ndarray) -> str:
         vad_parameters=dict(threshold=0.3, min_silence_duration_ms=500),
         beam_size=1,
         condition_on_previous_text=False,
+        initial_prompt=_PROMPT,
     )
     return " ".join(s.text.strip() for s in segments).strip()
 
 
 def transcribe_bytes(audio: bytes) -> str:
     samples = _decode_ffmpeg(audio)
+    samples = samples[int(BEEP_TRIM_S * SR):]  # remove the start beep
     if len(samples) == 0:
         print("[stt] ffmpeg produced no audio")
         return ""
     peak = float(np.abs(samples).max())
     rms = float(np.sqrt(np.mean(samples ** 2)))
-    print(f"[stt] v2 decoded {len(samples) / SR:.1f}s, peak={peak:.3f}, rms={rms:.4f}")
+    print(f"[stt] v3 decoded {len(samples) / SR:.1f}s, peak={peak:.3f}, rms={rms:.4f}")
     _save_debug(samples)
 
     if peak < 0.01:
