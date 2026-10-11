@@ -42,8 +42,10 @@ class WalkAgent:
         if not s.prefetched and not s.prefetching:
             s.prefetching = True
             try:
-                data = await prefetch.prefetch_area(s.lat, s.lon)
-                s.pois, s.species, s.weather, s.sun = data["pois"], data["species"], data["weather"], data["sun"]
+                data = await prefetch.prefetch_area(s.lat, s.lon, store=self.store)
+                s.pois, s.species, s.weather, s.sun = (
+                    data["pois"], data["species"], data["weather"], data["sun"]
+                )
                 s.prefetched = True
                 s.last_challenge_ts = time.time()
             finally:
@@ -51,7 +53,10 @@ class WalkAgent:
             temp = s.weather.get("temperature_2m")
             greeting = "Ready when you are."
             if temp is not None:
-                greeting = f"Ready when you are. It's about {round(temp)} degrees out. Tap the screen and tell me what you'd like to do."
+                greeting = (
+                    f"Ready when you are. It's about {round(temp)} degrees out. "
+                    "Tap the screen and tell me what you'd like to do."
+                )
             yield greeting
             return
 
@@ -68,25 +73,34 @@ class WalkAgent:
             mins = weather.minutes_to_sunset(s.sun)
             if mins is not None and 0 < mins <= config.SUNSET_WARN_MIN:
                 s.sunset_warned = True
-                yield f"Heads up: sunset is in about {mins} minutes, so you may want to start heading back."
+                yield (
+                    f"Heads up: sunset is in about {mins} minutes, "
+                    "so you may want to start heading back."
+                )
                 return
 
         # 3) a nearby point of interest, rate-limited
         now = time.time()
         if now - s.last_narration_ts >= config.NARRATION_COOLDOWN_S:
-            poi = geofence.nearest_unseen(s.pois, s.lat, s.lon, s.narrated, config.GEOFENCE_RADIUS_M)
+            poi = geofence.nearest_unseen(
+                s.pois, s.lat, s.lon, s.narrated, config.GEOFENCE_RADIUS_M
+            )
             if poi:
                 s.narrated.add(geofence.poi_key(poi))
                 s.last_narration_ts = now
                 ctx = f"{poi['name']} ({poi.get('kind')}): {poi['facts']}"
                 task = "Mention this place the walker is passing right now, in 2 or 3 short sentences."
-                async for sent in llm.sentences(llm.chat_stream(prompts.narration_prompt(task, ctx))):
+                async for sent in llm.sentences(
+                    llm.chat_stream(prompts.narration_prompt(task, ctx))
+                ):
                     yield sent
                 return
 
         # 4) a touch-grass challenge every few minutes
-        if (now - s.last_challenge_ts >= config.CHALLENGE_EVERY_S
-                and now - s.last_narration_ts >= QUIET_BEFORE_CHALLENGE_S):
+        if (
+            now - s.last_challenge_ts >= config.CHALLENGE_EVERY_S
+            and now - s.last_narration_ts >= QUIET_BEFORE_CHALLENGE_S
+        ):
             yield self._issue_challenge()
 
     # ---------- utterances ----------
@@ -94,7 +108,10 @@ class WalkAgent:
         s = self.s
         try:
             intent = await llm.chat_json(
-                [{"role": "system", "content": prompts.INTENT_SYSTEM}, {"role": "user", "content": text}],
+                [
+                    {"role": "system", "content": prompts.INTENT_SYSTEM},
+                    {"role": "user", "content": text},
+                ],
                 prompts.INTENT_SCHEMA,
             )
         except Exception as exc:
@@ -128,12 +145,42 @@ class WalkAgent:
         elif kind == "chitchat" and s.pending_challenge:
             async for sent in self._answer_challenge(text):
                 yield sent
-        else:  # ask / chitchat
-            task = f"Answer the walker's question briefly: {text}"
-            async for sent in llm.sentences(llm.chat_stream(prompts.narration_prompt(task, self._context()))):
-                yield sent
+        else:
+            # Special-case sunset / sunrise questions
+            if re.search(r"\b(sunset|sunrise|sun\s*set|daylight|how much light)\b", text.lower()):
+                async for sent in self._answer_sun(text):
+                    yield sent
+            else:
+                # Generic ask / chitchat
+                task = f"Answer the walker's question briefly: {text}"
+                async for sent in llm.sentences(
+                    llm.chat_stream(prompts.narration_prompt(task, self._context()))
+                ):
+                    yield sent
 
     # ---------- helpers ----------
+    async def _answer_sun(self, text: str) -> AsyncIterator[str]:
+        """Reliable answer for sunset / sunrise questions."""
+        s = self.s
+        if not s.sun:
+            yield "I don't have the local sunset time yet. Give me a few more seconds to fetch it."
+            return
+
+        mins = weather.minutes_to_sunset(s.sun)
+        sunset_clock = weather.format_clock(s.sun["sunset"])
+        sunrise_clock = weather.format_clock(s.sun.get("sunrise", ""))
+
+        if "sunrise" in text.lower():
+            yield f"Sunrise today was at {sunrise_clock}."
+            return
+
+        if mins is None:
+            yield f"Sunset today is at {sunset_clock}."
+        elif mins > 0:
+            yield f"Sunset today is at {sunset_clock}, about {mins} minutes from now."
+        else:
+            yield f"Sunset was at {sunset_clock}. It's already dark."
+
     def _issue_challenge(self) -> str:
         s = self.s
         _idx, text = challenges.next_challenge(s.used_challenges)
@@ -145,10 +192,14 @@ class WalkAgent:
         s = self.s
         challenge, s.pending_challenge = s.pending_challenge, None
         if s.walk_id is not None:
-            self.store.add_sighting(s.walk_id, s.lat, s.lon, "challenge", text, f"challenge: {challenge}")
+            self.store.add_sighting(
+                s.walk_id, s.lat, s.lon, "challenge", text, f"challenge: {challenge}"
+            )
         ctx = f"Challenge you gave: {challenge}\nWhat the walker said: {text}"
         task = "React warmly to what the walker found in one or two short sentences. Do not add any facts."
-        async for sent in llm.sentences(llm.chat_stream(prompts.narration_prompt(task, ctx))):
+        async for sent in llm.sentences(
+            llm.chat_stream(prompts.narration_prompt(task, ctx))
+        ):
             yield sent
 
     def _log_sighting(self, intent: dict, text: str) -> str:
@@ -175,7 +226,9 @@ class WalkAgent:
             yield "I don't have your location yet. Give me a few seconds."
             return
         try:
-            route = await routing.plan_loop(s.lat, s.lon, intent.get("minutes"), intent.get("km"))
+            route = await routing.plan_loop(
+                s.lat, s.lon, intent.get("minutes"), intent.get("km")
+            )
         except Exception as exc:
             print(f"[route] failed: {exc!r}")
             yield "Sorry, I couldn't plan a route just now."
@@ -189,17 +242,60 @@ class WalkAgent:
             yield "I'll tell you when to turn."
 
     async def _end(self) -> AsyncIterator[str]:
+        """Warm, structured spoken summary when the walker says they're done."""
         s = self.s
-        sightings = self.store.sightings(s.walk_id) if s.walk_id else []
-        logged = ", ".join(x["subject"] for x in sightings) or "none"
-        ctx = f"Logged sightings and challenge answers: {logged}.\nDistance and time: {self._stats_sentence()}"
-        task = "Give a warm two-sentence wrap-up of the walk. Mention the distance and anything they logged."
+        if s.walk_id is None:
+            yield "Okay, take care."
+            s.ended = True
+            return
+
+        # Collect facts
+        points = self.store.track_points(s.walk_id)
+        distance_m = stats.track_distance_m(points)
+        elapsed = time.time() - s.started_ts if s.started_ts else 0.0
+        minutes = max(1, round(elapsed / 60))
+
+        sightings = self.store.sightings(s.walk_id)
+        species = [x["subject"] for x in sightings if x["kind"] in SPECIES_KINDS]
+        challenges = [x for x in sightings if x["kind"] == "challenge"]
+        new_species = self.store.new_species_for_walk(s.walk_id)
+
+        # Build a clear spoken summary
         parts = []
-        async for sent in llm.sentences(llm.chat_stream(prompts.narration_prompt(task, ctx))):
-            parts.append(sent)
-            yield sent
-        if s.walk_id is not None:
-            self.store.end_walk(s.walk_id, " ".join(parts))
+
+        if distance_m < 50:
+            parts.append(f"That was a short one — about {minutes} minutes.")
+        else:
+            km = distance_m / 1000
+            parts.append(f"You walked about {km:.1f} kilometres in {minutes} minutes.")
+
+        if species:
+            if len(species) == 1:
+                parts.append(f"You logged one species: {species[0]}.")
+            else:
+                parts.append(f"You logged {len(species)} species, including {', '.join(species[:3])}.")
+            if new_species:
+                if len(new_species) == 1:
+                    parts.append(f"{new_species[0].capitalize()} was new for your life list.")
+                else:
+                    parts.append(f"{len(new_species)} of them were new for your life list.")
+        else:
+            parts.append("You didn't log any birds or plants this time.")
+
+        if challenges:
+            parts.append(f"You also completed {len(challenges)} challenge{'s' if len(challenges) != 1 else ''}.")
+
+        parts.append("Nice work getting outside. Your walk is saved in the journal.")
+
+        summary_text = " ".join(parts)
+
+        # Speak it sentence by sentence
+        for sent in re.split(r'(?<=[.!?])\s+', summary_text):
+            if sent.strip():
+                yield sent.strip()
+
+        # Persist
+        self.store.end_walk(s.walk_id, summary_text)
         s.ended = True
 
     def _context(self) -> str:
@@ -208,21 +304,36 @@ class WalkAgent:
         if s.weather:
             lines.append(
                 f"Weather now: {s.weather.get('temperature_2m')} C, "
-                f"wind {s.weather.get('wind_speed_10m')} km/h, precipitation {s.weather.get('precipitation')} mm."
+                f"wind {s.weather.get('wind_speed_10m')} km/h, "
+                f"precipitation {s.weather.get('precipitation')} mm."
             )
         if s.sun:
             mins = weather.minutes_to_sunset(s.sun)
             if mins is not None:
                 when = f"in about {mins} minutes" if mins > 0 else "already passed"
-                lines.append(f"Sunset today is at {weather.format_clock(s.sun['sunset'])}, {when}.")
+                lines.append(
+                    f"Sunset today is at {weather.format_clock(s.sun['sunset'])}, {when}."
+                )
         if s.lat is not None and s.pois:
-            near = sorted(s.pois, key=lambda p: geofence.distance_m(s.lat, s.lon, p["lat"], p["lon"]))[:5]
+            near = sorted(
+                s.pois,
+                key=lambda p: geofence.distance_m(s.lat, s.lon, p["lat"], p["lon"]),
+            )[:5]
             lines.append("Nearby places, closest first:")
             for p in near:
                 d = round(geofence.distance_m(s.lat, s.lon, p["lat"], p["lon"]))
-                lines.append(f"- {p['name']} ({p.get('kind')}, {d} m away): {p.get('facts') or 'no details'}")
+                lines.append(
+                    f"- {p['name']} ({p.get('kind')}, {d} m away): "
+                    f"{p.get('facts') or 'no details'}"
+                )
         if s.species.get("birds"):
-            lines.append("Birds commonly recorded nearby this month: " + ", ".join(s.species["birds"]) + ".")
+            lines.append(
+                "Birds commonly recorded nearby this month: "
+                + ", ".join(s.species["birds"]) + "."
+            )
         if s.species.get("plants"):
-            lines.append("Plants commonly recorded nearby this month: " + ", ".join(s.species["plants"]) + ".")
+            lines.append(
+                "Plants commonly recorded nearby this month: "
+                + ", ".join(s.species["plants"]) + "."
+            )
         return "\n".join(lines) or "No local data is available yet."

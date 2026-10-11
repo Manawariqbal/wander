@@ -22,4 +22,13 @@ CREATE TABLE IF NOT EXISTS track (
   ts TEXT NOT NULL,
   lat REAL, lon REAL
 );
--- TODO(poi_cache): cache prefetched POIs/species per ~1km grid cell for offline use
+
+-- Grid-cell cache so a walk can run mostly offline (except TTS)
+CREATE TABLE IF NOT EXISTS poi_cache (
+  cell TEXT PRIMARY KEY,          -- e.g. "18.52_73.85"  (~1 km grid)
+  pois_json TEXT NOT NULL,        -- list of place dicts
+  species_json TEXT NOT NULL,     -- {"birds": [...], "plants": [...]}
+  weather_json TEXT,              -- optional, expires faster
+  sun_json TEXT,
+  fetched_at TEXT NOT NULL
+);
