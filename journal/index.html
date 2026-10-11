@@ -3,61 +3,266 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#6fbf3f">
   <title>wander journal</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <style>
-    body { margin: 0; font: 15px/1.5 system-ui, sans-serif; display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
-    aside { overflow: auto; padding: 16px; border-right: 1px solid #ddd; }
-    #map { height: 100%; }
-    .walk { padding: 8px 0; border-bottom: 1px solid #eee; cursor: pointer; }
-    .walk small { color: #777; display: block; }
-    @media (max-width: 700px) { body { grid-template-columns: 1fr; grid-template-rows: 40vh 1fr; } aside { order: 2; } }
+    :root {
+      --sky: #b9e46a; --meadow: #58b036; --field: #2e8a35; --deep: #0e3c1e;
+      --paper: #f6fae8; --card: #ffffff; --line: #dce8c4; --ink: #17321d; --muted: #5d7a5a;
+      --amber: #e39a12; --blue: #3b82c4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--paper); color: var(--ink);
+      font: 16px/1.5 ui-rounded, "Avenir Next Rounded", "Nunito", "Segoe UI", system-ui, sans-serif;
+    }
+    header {
+      background: linear-gradient(180deg, var(--sky), var(--meadow));
+      color: var(--deep); padding: 22px 24px 30px; border-radius: 0 0 28px 28px;
+    }
+    header h1 { margin: 0; font-size: 28px; letter-spacing: -.01em; }
+    header p { margin: 2px 0 0; color: #1d4a28; }
+    main {
+      display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px;
+      max-width: 1200px; margin: 0 auto; padding: 20px;
+    }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+    .card + .card { margin-top: 16px; }
+    h2 { margin: 0 0 10px; font-size: 18px; }
+    h3 { margin: 18px 0 8px; font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .muted { color: var(--muted); font-size: 14px; }
+    .empty { color: var(--muted); font-size: 15px; }
+
+    .walk {
+      display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+      background: transparent; border: 1px solid transparent; border-radius: 12px; padding: 10px 12px;
+    }
+    .walk:hover { background: #f1f8dc; }
+    .walk[aria-current="true"] { background: #e8f5c8; border-color: var(--meadow); }
+    .walk strong { display: block; }
+
+    .life { list-style: none; margin: 0; padding: 0; }
+    .life li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+    .life li:last-child { border-bottom: 0; }
+
+    #map { height: 380px; border-radius: 16px; border: 1px solid var(--line); }
+
+    .badge {
+      display: inline-block; font-size: 12px; padding: 1px 9px; border-radius: 999px; margin-right: 8px;
+      background: #e3f2c0; color: #28551f; vertical-align: 1px;
+    }
+    .badge.challenge { background: #fbe9c4; color: #7a4d00; }
+    .badge.other { background: #dcebf8; color: #1f4f7a; }
+    #sights { list-style: none; margin: 0; padding: 0; }
+    #sights li { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    #sights li:last-child { border-bottom: 0; }
+    #sights .prompt { display: block; margin-left: 2px; color: var(--muted); font-size: 13px; }
+
+    .postcard { border-left: 6px solid var(--amber); background: #fffaf0; }
+    #pctext { font: 19px/1.65 Georgia, "Times New Roman", serif; margin: 12px 0; white-space: pre-wrap; }
+    #pcaudio { width: 100%; margin-top: 4px; }
+    button.primary {
+      font: inherit; font-weight: 700; cursor: pointer; border: 0; border-radius: 999px;
+      padding: 10px 20px; background: var(--deep); color: #f5ffe0;
+    }
+    button.primary:disabled { opacity: .6; cursor: wait; }
+    #pcerror { color: #a33; font-size: 14px; margin: 8px 0 0; }
+
+    @media (max-width: 800px) {
+      main { grid-template-columns: 1fr; padding: 14px; }
+      #map { height: 300px; }
+    }
   </style>
 </head>
 <body>
-  <aside>
-    <h2>Walks</h2>
-    <div id="list"></div>
-    <h3>Sightings</h3>
-    <div id="sightings"></div>
-    <p id="summary"></p>
-  </aside>
-  <div id="map"></div>
+  <header>
+    <h1>wander journal</h1>
+    <p id="tagline">Your walks, what you spotted, and a postcard for each.</p>
+  </header>
+
+  <main>
+    <aside>
+      <div class="card">
+        <h2>Walks</h2>
+        <div id="walks"></div>
+      </div>
+      <div class="card">
+        <h2>Life list <span id="lifecount" class="muted"></span></h2>
+        <ul id="life" class="life"></ul>
+      </div>
+    </aside>
+
+    <section>
+      <div id="map"></div>
+      <div class="card">
+        <h2 id="title">Pick a walk</h2>
+        <p id="meta" class="muted"></p>
+        <p id="summary"></p>
+      </div>
+      <div class="card postcard" id="pcbox" hidden>
+        <h2>Postcard</h2>
+        <button class="primary" id="pcbtn">Make my postcard</button>
+        <p id="pcerror"></p>
+        <p id="pctext" hidden></p>
+        <audio id="pcaudio" controls hidden></audio>
+      </div>
+      <div class="card" id="sightbox" hidden>
+        <h2>What you noticed</h2>
+        <ul id="sights"></ul>
+      </div>
+    </section>
+  </main>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script>
-    const map = L.map("map").setView([20, 0], 2);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
-    let layers = [];
+    const $ = (id) => document.getElementById(id);
+    const el = (tag, props = {}, ...kids) => {
+      const n = document.createElement(tag);
+      Object.assign(n, props);
+      kids.forEach((k) => n.append(k));
+      return n;
+    };
+    const fmt = (iso) => new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    const SPECIES = ["bird", "plant", "animal"];
+    const COLORS = { species: "#3f9f3a", challenge: "#e39a12", other: "#3b82c4" };
+    const groupOf = (kind) => (kind === "challenge" ? "challenge" : SPECIES.includes(kind) ? "species" : "other");
 
-    async function load() {
+    const map = L.map("map").setView([20, 0], 2);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(map);
+    let layers = [], currentId = null, currentWalk = null;
+
+    async function loadWalks() {
       const walks = await (await fetch("/api/walks")).json();
-      const list = document.getElementById("list");
-      list.innerHTML = "";
+      const box = $("walks");
+      box.replaceChildren();
+      if (!walks.length) {
+        box.append(el("p", { className: "empty", textContent: "No walks yet. Go and take one." }));
+        return;
+      }
       walks.forEach((w) => {
-        const d = document.createElement("div");
-        d.className = "walk";
-        d.innerHTML = `Walk #${w.id}<small>${w.started_at}</small>`;
-        d.onclick = () => show(w.id);
-        list.appendChild(d);
+        const b = el("button", { className: "walk", type: "button" },
+          el("strong", { textContent: `Walk #${w.id}` }),
+          el("span", { className: "muted", textContent: fmt(w.started_at) }));
+        b.dataset.id = w.id;
+        b.onclick = () => show(w.id);
+        box.append(b);
       });
-      if (walks.length) show(walks[0].id);
+      show(walks[0].id);
+    }
+
+    async function loadLife() {
+      const list = await (await fetch("/api/lifelist")).json();
+      $("lifecount").textContent = list.length ? `(${list.length})` : "";
+      const ul = $("life");
+      ul.replaceChildren();
+      if (!list.length) {
+        ul.append(el("li", { className: "empty", textContent: "Log a bird, plant or animal to start it." }));
+        return;
+      }
+      list.forEach((s) => ul.append(el("li", {},
+        el("span", { textContent: s.subject }),
+        el("span", { className: "muted", textContent: `${s.kind} · ${s.times}×` }))));
+    }
+
+    function popup(s) {
+      const box = el("div", {}, el("strong", { textContent: s.subject }));
+      if (s.kind === "challenge" && s.transcript) {
+        box.append(el("br"), el("span", { textContent: s.transcript.replace(/^challenge: /, "") }));
+      }
+      return box;
     }
 
     async function show(id) {
+      currentId = id;
       const w = await (await fetch(`/api/walks/${id}`)).json();
-      layers.forEach((l) => map.removeLayer(l)); layers = [];
-      if (w.route) layers.push(L.geoJSON(w.route.geometry, { style: { color: "#888", dashArray: "6 6" } }).addTo(map));
-      if (w.track.length) layers.push(L.polyline(w.track, { color: "#2a7" , weight: 4 }).addTo(map));
-      const sl = document.getElementById("sightings"); sl.innerHTML = "";
+      if (currentId !== id) return;  // user clicked another walk meanwhile
+      currentWalk = w;
+      document.querySelectorAll(".walk").forEach((b) => b.setAttribute("aria-current", String(b.dataset.id == id)));
+
+      layers.forEach((l) => map.removeLayer(l));
+      layers = [];
+      const pts = [];
+      if (w.route) layers.push(L.geoJSON(w.route.geometry, { style: { color: "#8a9a80", weight: 4, dashArray: "6 8" } }).addTo(map));
+      if (w.track.length) {
+        layers.push(L.polyline(w.track, { color: "#2e8a35", weight: 5, opacity: .9 }).addTo(map));
+        pts.push(...w.track);
+      }
       w.sightings.forEach((s) => {
-        if (s.lat != null) layers.push(L.marker([s.lat, s.lon]).bindPopup(`${s.subject}`).addTo(map));
-        sl.insertAdjacentHTML("beforeend", `<div>${s.subject} <small>(${s.kind || "other"})</small></div>`);
+        if (s.lat == null) return;
+        const c = COLORS[groupOf(s.kind)];
+        layers.push(L.circleMarker([s.lat, s.lon], { radius: 9, color: "#fff", weight: 2, fillColor: c, fillOpacity: .95 })
+          .bindPopup(popup(s)).addTo(map));
+        pts.push([s.lat, s.lon]);
       });
-      document.getElementById("summary").textContent = w.summary || "";
-      const pts = w.track.length ? w.track : (w.start_lat ? [[w.start_lat, w.start_lon]] : []);
+      if (!pts.length && w.start_lat != null) pts.push([w.start_lat, w.start_lon]);
       if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 17 });
+
+      $("title").textContent = `Walk #${w.id}`;
+      $("meta").textContent = fmt(w.started_at) + (w.ended_at ? "" : " · not finished");
+      $("summary").textContent = w.summary || "";
+
+      $("pcbox").hidden = false;
+      renderPostcard(w);
+
+      $("sightbox").hidden = false;
+      const ul = $("sights");
+      ul.replaceChildren();
+      if (!w.sightings.length) ul.append(el("li", { className: "empty", textContent: "Nothing logged on this walk." }));
+      w.sightings.forEach((s) => {
+        const g = groupOf(s.kind);
+        const li = el("li", {}, el("span", { className: `badge ${g === "species" ? "" : g}`, textContent: g === "species" ? s.kind : g }),
+          el("span", { textContent: s.subject }));
+        if (g === "challenge" && s.transcript) {
+          li.append(el("span", { className: "prompt", textContent: s.transcript.replace(/^challenge: /, "") }));
+        }
+        ul.append(li);
+      });
     }
-    load();
+
+    function renderPostcard(w) {
+      $("pcerror").textContent = "";
+      const has = !!w.postcard;
+      $("pctext").hidden = !has;
+      $("pctext").textContent = w.postcard || "";
+      $("pcbtn").textContent = has ? "Write a new postcard" : "Make my postcard";
+      const a = $("pcaudio");
+      if (w.postcard_audio) {
+        a.src = `/api/walks/${w.id}/postcard.audio?t=${Date.now()}`;
+        a.hidden = false;
+      } else {
+        a.hidden = true;
+        a.removeAttribute("src");
+      }
+    }
+
+    $("pcbtn").onclick = async () => {
+      const id = currentId, btn = $("pcbtn");
+      btn.disabled = true;
+      btn.textContent = "Writing your postcard…";
+      $("pcerror").textContent = "";
+      try {
+        const r = await fetch(`/api/walks/${id}/postcard?regenerate=${!!(currentWalk && currentWalk.postcard)}`, { method: "POST" });
+        if (!r.ok) {
+          let msg = `Something went wrong (${r.status})`;
+          try { msg = (await r.json()).detail || msg; } catch (_) {}
+          throw new Error(msg);
+        }
+        await show(id);
+        const a = $("pcaudio");
+        if (!a.hidden) a.play().catch(() => {});
+      } catch (e) {
+        $("pcerror").textContent = e.message;
+        btn.textContent = currentWalk && currentWalk.postcard ? "Write a new postcard" : "Make my postcard";
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    loadWalks();
+    loadLife();
   </script>
 </body>
 </html>

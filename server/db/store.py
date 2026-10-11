@@ -27,6 +27,14 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript((Path(__file__).parent / "schema.sql").read_text())
         self.conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database file was first created."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(walks)")}
+        if "postcard" not in cols:
+            self.conn.execute("ALTER TABLE walks ADD COLUMN postcard TEXT")
+            self.conn.commit()
 
     def start_walk(self, lat: float, lon: float) -> int:
         cur = self.conn.execute(
@@ -62,6 +70,39 @@ class Store:
             f"SELECT COUNT(DISTINCT subject) AS n FROM sightings WHERE kind IN ({marks})", SPECIES_KINDS
         ).fetchone()
         return row["n"]
+
+    def last_track_ts(self, walk_id: int) -> str | None:
+        row = self.conn.execute("SELECT ts FROM track WHERE walk_id=? ORDER BY id DESC LIMIT 1", (walk_id,)).fetchone()
+        return row["ts"] if row else None
+
+    def new_species_for_walk(self, walk_id: int) -> list[str]:
+        """Species first logged on this walk (not seen on any earlier walk)."""
+        marks = ",".join("?" * len(SPECIES_KINDS))
+        rows = self.conn.execute(
+            f"""SELECT DISTINCT s.subject FROM sightings s
+                WHERE s.walk_id=? AND s.kind IN ({marks})
+                  AND NOT EXISTS (SELECT 1 FROM sightings o WHERE o.subject=s.subject AND o.walk_id < s.walk_id)""",
+            (walk_id, *SPECIES_KINDS),
+        ).fetchall()
+        return [r["subject"] for r in rows]
+
+    def life_list(self) -> list[dict]:
+        """Every distinct bird/plant/animal ever logged, oldest first."""
+        marks = ",".join("?" * len(SPECIES_KINDS))
+        rows = self.conn.execute(
+            f"""SELECT subject, MIN(kind) AS kind, COUNT(*) AS times, MIN(ts) AS first_seen
+                FROM sightings WHERE kind IN ({marks}) GROUP BY subject ORDER BY first_seen""",
+            SPECIES_KINDS,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_postcard(self, walk_id: int, text: str) -> None:
+        self.conn.execute("UPDATE walks SET postcard=? WHERE id=?", (text, walk_id))
+        self.conn.commit()
+
+    def get_postcard(self, walk_id: int) -> str | None:
+        row = self.conn.execute("SELECT postcard FROM walks WHERE id=?", (walk_id,)).fetchone()
+        return row["postcard"] if row and row["postcard"] else None
 
     def set_route(self, walk_id: int, route: dict) -> None:
         self.conn.execute("UPDATE walks SET route_json=? WHERE id=?", (json.dumps(route), walk_id))

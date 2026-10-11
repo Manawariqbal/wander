@@ -6,9 +6,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import config
+from server import config, postcard
 from server.agent.pipeline import WalkAgent
 from server.audio import stt, tts
 from server.db.store import Store
@@ -143,7 +144,33 @@ def get_walk(walk_id: int):
     walk = store.get_walk(walk_id)
     if not walk:
         raise HTTPException(404, "walk not found")
+    walk["postcard_audio"] = postcard.audio_path(walk_id) is not None
     return walk
+
+
+@app.get("/api/lifelist")
+def life_list():
+    return store.life_list()
+
+
+@app.post("/api/walks/{walk_id}/postcard")
+async def make_postcard(walk_id: int, regenerate: bool = False):
+    """Write (or return the cached) spoken postcard for a walk."""
+    if not store.get_walk(walk_id):
+        raise HTTPException(404, "walk not found")
+    try:
+        return await postcard.ensure_postcard(store, walk_id, regenerate)
+    except Exception as exc:
+        print(f"[postcard] failed: {exc!r}")
+        raise HTTPException(502, "Could not write the postcard just now. Is Ollama running?")
+
+
+@app.get("/api/walks/{walk_id}/postcard.audio")
+def postcard_audio(walk_id: int):
+    path = postcard.audio_path(walk_id)
+    if not path:
+        raise HTTPException(404, "no postcard audio yet")
+    return FileResponse(path, media_type="audio/mpeg" if path.suffix == ".mp3" else "audio/wav")
 
 
 # static mounts last so they don't shadow the routes above

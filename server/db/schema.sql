@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS walks (
   ended_at TEXT,
   start_lat REAL, start_lon REAL,
   route_json TEXT,
-  summary TEXT
+  summary TEXT,
+  postcard TEXT
 );
 CREATE TABLE IF NOT EXISTS sightings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
