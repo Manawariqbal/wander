@@ -7,9 +7,11 @@ class Session:
     walk_id: int | None = None
     lat: float | None = None
     lon: float | None = None
+    started_ts: float = 0.0
     pois: list[dict] = field(default_factory=list)
     species: dict = field(default_factory=dict)
     weather: dict = field(default_factory=dict)
+    sun: dict = field(default_factory=dict)
     narrated: set[str] = field(default_factory=set)
     last_narration_ts: float = 0.0
     last_spoken: list[str] = field(default_factory=list)
@@ -18,3 +20,8 @@ class Session:
     prefetched: bool = False
     prefetching: bool = False
     ended: bool = False
+    # touch-grass challenges
+    last_challenge_ts: float = 0.0
+    used_challenges: set[int] = field(default_factory=set)
+    pending_challenge: str | None = None
+    sunset_warned: bool = False

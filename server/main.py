@@ -1,7 +1,9 @@
 """FastAPI app: websocket for the walking client + tiny REST API for the journal."""
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +14,17 @@ from server.audio import stt, tts
 from server.db.store import Store
 
 store = Store(config.DB_PATH)
+METRICS = Path("data/metrics.jsonl")
+
+
+def log_metrics(m: dict) -> None:
+    """Append one latency record; used by scripts/latency_report.py for the write-up."""
+    try:
+        METRICS.parent.mkdir(exist_ok=True)
+        with METRICS.open("a") as f:
+            f.write(json.dumps(m) + "\n")
+    except Exception as exc:
+        print(f"[metrics] could not write: {exc!r}")
 
 
 @asynccontextmanager
@@ -23,7 +36,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="wander", lifespan=lifespan)
 
 
-async def speak(ws: WebSocket, agent: WalkAgent, sentence_iter) -> None:
+async def speak(ws: WebSocket, agent: WalkAgent, sentence_iter, metrics: dict | None = None) -> None:
     """Pipeline: sentences (Gemma) -> audio (TTS) -> client, overlapping generation and synthesis."""
     q: asyncio.Queue = asyncio.Queue(maxsize=3)
 
@@ -40,6 +53,8 @@ async def speak(ws: WebSocket, agent: WalkAgent, sentence_iter) -> None:
     try:
         while (sent := await q.get()) is not None:
             audio, mime = await tts.synthesize(sent)
+            if metrics is not None and "first_audio_s" not in metrics:
+                metrics["first_audio_s"] = round(time.perf_counter() - metrics["t0"], 2)
             await ws.send_json({"type": "audio", "seq": seq, "mime": mime, "text": sent})
             await ws.send_bytes(audio)
             spoken.append(sent)
@@ -48,6 +63,10 @@ async def speak(ws: WebSocket, agent: WalkAgent, sentence_iter) -> None:
         prod.cancel()
         if spoken:
             agent.s.last_spoken = spoken
+        if metrics is not None and "first_audio_s" in metrics:
+            metrics["total_s"] = round(time.perf_counter() - metrics["t0"], 2)
+            metrics["sentences"] = len(spoken)
+            log_metrics({k: v for k, v in metrics.items() if k != "t0"})
 
 
 async def guarded(coro) -> None:
@@ -62,18 +81,21 @@ async def guarded(coro) -> None:
 async def handle_audio(ws: WebSocket, agent: WalkAgent, audio: bytes) -> None:
     await ws.send_json({"type": "status", "state": "thinking"})
     print(f"[audio] received {len(audio)} bytes")
+    metrics = {"kind": "utterance", "ts": round(time.time()), "t0": time.perf_counter()}
     try:
         text = await stt.transcribe(audio)
+        metrics["stt_s"] = round(time.perf_counter() - metrics["t0"], 2)
         print(f"[stt] {text!r}")
         await ws.send_json({"type": "transcript", "text": text})
         if not text:
             await ws.send_json({"type": "status", "state": "ready"})
             return
-        await speak(ws, agent, agent.on_utterance(text))
+        await speak(ws, agent, agent.on_utterance(text), metrics)
         await ws.send_json({"type": "status", "state": "ready"})
     except Exception:
         await ws.send_json({"type": "status", "state": "ready"})
         raise
+
 
 @app.websocket("/ws/walk")
 async def walk_ws(ws: WebSocket):
@@ -122,9 +144,6 @@ def get_walk(walk_id: int):
     if not walk:
         raise HTTPException(404, "walk not found")
     return walk
-
-from fastapi.responses import FileResponse
-
 
 
 # static mounts last so they don't shadow the routes above

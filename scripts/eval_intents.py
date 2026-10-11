@@ -25,6 +25,10 @@ CASES = [
     ("I'm done for today", "end_walk"),
     ("let's finish the walk", "end_walk"),
     ("this is a nice day", "chitchat"),
+    ("how far have I walked", "stats"),
+    ("how long have I been out here", "stats"),
+    ("give me a challenge", "challenge"),
+    ("got anything fun for me to do", "challenge"),
 ]
 
 

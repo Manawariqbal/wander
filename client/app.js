@@ -49,7 +49,7 @@
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/ws/walk`);
     ws.binaryType = "arraybuffer";
-    ws.onopen = () => setStatus("ready");
+    ws.onopen = () => { setStatus("ready"); sendGps(); };
     ws.onclose = () => { setStatus("reconnecting"); setTimeout(connect, 2000); };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
@@ -69,18 +69,44 @@
   }
 
   // ---- GPS ----
-  let lastSent = 0;
+    // ---- GPS ----
+  const gpsEl = document.createElement("div");
+  gpsEl.style.cssText =
+    "position:fixed;top:0;left:0;right:0;text-align:center;pointer-events:none;" +
+    "padding:calc(env(safe-area-inset-top,0px) + 10px) 12px 0;" +
+    "font:13px system-ui,sans-serif;color:#0e3c1e";
+  document.body.appendChild(gpsEl);
+  const setGps = (t) => { gpsEl.textContent = t; };
+
+  let lastPos = null;
+  function sendGps() {
+    if (!lastPos || !ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: "gps", lat: lastPos.latitude, lon: lastPos.longitude, acc: lastPos.accuracy }));
+  }
+  function onFix(pos) {
+    const first = !lastPos;
+    lastPos = pos.coords;
+    setGps(`GPS ok (±${Math.round(pos.coords.accuracy)} m)`);
+    if (first) sendGps();
+  }
+  function onGpsError(err) {
+    const msg = {
+      1: "GPS blocked: allow Location for this site in your browser settings",
+      2: "GPS unavailable: turn on Location in your phone settings, then go outside",
+      3: "GPS timed out: still trying",
+    }[err.code] || "GPS error";
+    setGps(msg);
+    console.warn("gps", err);
+  }
   function watchGps() {
-    navigator.geolocation.watchPosition(
-      (pos) => {
-        const now = Date.now();
-        if (now - lastSent < 8000 || !ws || ws.readyState !== 1) return;
-        lastSent = now;
-        ws.send(JSON.stringify({ type: "gps", lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy }));
-      },
-      (err) => console.warn("gps", err),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
-    );
+    if (!("geolocation" in navigator)) { setGps("This browser has no GPS support"); return; }
+    setGps("GPS: waiting for a fix...");
+    // quick coarse fix (Wi-Fi / cell) first, then precise updates
+    navigator.geolocation.getCurrentPosition(onFix, onGpsError,
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 120000 });
+    navigator.geolocation.watchPosition(onFix, onGpsError,
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+    setInterval(sendGps, 8000);  // keep pinging even when the position doesn't change
   }
 
   // ---- voice activity detection (simple energy-based) ----

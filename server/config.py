@@ -31,3 +31,5 @@ DB_PATH = _get("DB_PATH", "data/wander.db")
 GEOFENCE_RADIUS_M = 40
 NARRATION_COOLDOWN_S = 120
 POI_SEARCH_RADIUS_M = 600
+CHALLENGE_EVERY_S = 420      # a "touch grass" prompt roughly every 7 minutes
+SUNSET_WARN_MIN = 45         # warn once when sunset is this close

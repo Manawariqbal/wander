@@ -5,6 +5,8 @@ Return JSON only. Intents:
 - plan_route: wants a walking loop (extract minutes and/or km if given, and any preference like shady, quiet, scenic)
 - ask: asks about their surroundings, nature, history, or the weather
 - log_sighting: tells you they saw/heard something (extract the thing as `subject`, type as bird/plant/animal/place/other)
+- stats: asks how far, how long, or how many steps they have walked so far
+- challenge: asks for a nature challenge, a game, or something to do
 - repeat: asks you to say that again
 - skip: asks you to stop or move on
 - end_walk: says they are finished
@@ -15,7 +17,7 @@ INTENT_SCHEMA = {
     "properties": {
         "intent": {
             "type": "string",
-            "enum": ["plan_route", "ask", "log_sighting", "repeat", "skip", "end_walk", "chitchat"],
+            "enum": ["plan_route", "ask", "log_sighting", "stats", "challenge", "repeat", "skip", "end_walk", "chitchat"],
         },
         "minutes": {"type": ["integer", "null"]},
         "km": {"type": ["number", "null"]},

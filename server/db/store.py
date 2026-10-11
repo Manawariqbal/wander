@@ -1,13 +1,23 @@
 """SQLite persistence for walks, sightings and GPS track."""
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+SPECIES_KINDS = ("bird", "plant", "animal")
+_ARTICLES = re.compile(r"^(a|an|the|some)\s+", re.I)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def normalize_subject(subject: str) -> str:
+    """'A Kingfisher.' -> 'kingfisher', so the life list matches repeats."""
+    s = subject.strip().rstrip(".!?").strip().lower()
+    return _ARTICLES.sub("", s) or s
 
 
 class Store:
@@ -29,12 +39,29 @@ class Store:
         self.conn.execute("INSERT INTO track(walk_id, ts, lat, lon) VALUES (?,?,?,?)", (walk_id, _now(), lat, lon))
         self.conn.commit()
 
+    def track_points(self, walk_id: int) -> list[tuple[float, float]]:
+        rows = self.conn.execute("SELECT lat, lon FROM track WHERE walk_id=? ORDER BY id", (walk_id,)).fetchall()
+        return [(r["lat"], r["lon"]) for r in rows]
+
     def add_sighting(self, walk_id: int, lat, lon, kind: str | None, subject: str, transcript: str) -> None:
         self.conn.execute(
             "INSERT INTO sightings(walk_id, ts, lat, lon, kind, subject, transcript) VALUES (?,?,?,?,?,?,?)",
             (walk_id, _now(), lat, lon, kind, subject, transcript),
         )
         self.conn.commit()
+
+    def times_seen(self, subject: str) -> int:
+        """How many times this (normalized) subject was logged, across all walks."""
+        row = self.conn.execute("SELECT COUNT(*) AS n FROM sightings WHERE subject=?", (subject,)).fetchone()
+        return row["n"]
+
+    def species_count(self) -> int:
+        """Distinct birds/plants/animals ever logged (the 'life list')."""
+        marks = ",".join("?" * len(SPECIES_KINDS))
+        row = self.conn.execute(
+            f"SELECT COUNT(DISTINCT subject) AS n FROM sightings WHERE kind IN ({marks})", SPECIES_KINDS
+        ).fetchone()
+        return row["n"]
 
     def set_route(self, walk_id: int, route: dict) -> None:
         self.conn.execute("UPDATE walks SET route_json=? WHERE id=?", (json.dumps(route), walk_id))

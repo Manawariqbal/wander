@@ -12,9 +12,10 @@ async def prefetch_area(lat: float, lon: float) -> dict:
         places.wiki_nearby(lat, lon, config.POI_SEARCH_RADIUS_M + 400),
         nature.likely_species(lat, lon),
         weather.current_weather(lat, lon),
+        weather.sun_times(lat, lon),
         return_exceptions=True,
     )
-    osm, wiki, species, wx = results
+    osm, wiki, species, wx, sun = results
 
     def ok(x, default):
         if isinstance(x, Exception):
@@ -26,4 +27,5 @@ async def prefetch_area(lat: float, lon: float) -> dict:
         "pois": ok(osm, []) + ok(wiki, []),
         "species": ok(species, {}),
         "weather": ok(wx, {}),
+        "sun": ok(sun, {}),
     }
